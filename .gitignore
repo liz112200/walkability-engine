@@ -1,0 +1,55 @@
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# ── Environments ──────────────────────────────────────────────────────────────
+.env
+.venv/
+venv/
+ENV/
+
+# ── Jupyter ───────────────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# ── Data — raw files are never committed to Git ───────────────────────────────
+data/raw/
+data/external/
+data/processed/
+outputs/models/
+
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!data/external/.gitkeep
+!outputs/models/.gitkeep
+
+# ── OSMnx tile cache ──────────────────────────────────────────────────────────
+.osmnx_cache/
+
+# ── MLflow ────────────────────────────────────────────────────────────────────
+mlruns/
+mlartifacts/
+
+# ── Secrets ───────────────────────────────────────────────────────────────────
+.env
+*.env
+secrets.yml
+configs/secrets.yml
+
+# ── OS artefacts ─────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── IDE ───────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.code-workspace
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
+logs/
+*.log
