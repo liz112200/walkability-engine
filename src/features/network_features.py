@@ -1,9 +1,4 @@
 """
-src/features/network_features.py  (Week 2 — revised)
-──────────────────────────────────────────────────────
-Computes per-H3-hex network features from the preprocessed Chicago
-pedestrian edge network.
-
 Key design principles (revised after data exploration findings)
 ---------------------------------------------------------------
 1. LENGTH-WEIGHTED aggregation everywhere
@@ -113,21 +108,7 @@ def _compute_hex_features(
     n_df: gpd.GeoDataFrame,
     hex_area_km2: float,
 ) -> dict[str, float]:
-    """
-    Compute all features for a single H3 hex cell.
 
-    Parameters
-    ----------
-    e:
-        Edge subset already filtered to this hex (output of spatial join groupby).
-        Must contain pre-computed columns: _circuity, speed_regime,
-        speed_confidence, edge_role, hw_norm.
-    n_df:
-        Node subset already filtered to this hex.
-        Must contain pre-computed column: _degree.
-    hex_area_km2:
-        Hex area in km² (pre-computed from projected geometry).
-    """
     feat: dict[str, float] = {}
 
     n_edges = len(e)
