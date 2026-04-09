@@ -1,0 +1,42 @@
+# configs/city_config.yml
+# ─────────────────────────────────────────────────────────────────────────────
+# Central configuration for the target city.
+# All ingestion and feature scripts read from here — change the city once,
+# and everything downstream picks it up automatically.
+
+city:
+  name: "Chicago, Illinois, USA"        # Nominatim place string
+  slug: "chicago"                        # used for file naming
+  crs: "EPSG:26916"                      # UTM Zone 16N — metric, Chicago
+  crs_name: "UTM Zone 16N"
+  bbox:                                  # rough bounding box for sanity checks
+    north: 42.023
+    south: 41.644
+    east: -87.524
+    west: -87.940
+
+h3:
+  resolution: 9                          # ~174m edge length hex cells
+  # Chicago at res-9 ≈ 12,000–14,000 hex cells — manageable for GNN
+
+network:
+  network_type: "walk"
+  retain_all: false
+  truncate_by_edge: true
+  simplify: true
+  timeout: 300
+
+data_paths:
+  raw_osm:      "data/raw/osm"
+  raw_gtfs:     "data/raw/gtfs"
+  raw_census:   "data/raw/census"
+  raw_elevation: "data/raw/elevation"
+  raw_poi:      "data/raw/poi"
+  raw_crash:    "data/raw/crash"
+  processed:    "data/processed/features"
+  labels:       "data/processed/labels"
+  splits:       "data/processed/splits"
+  figures:      "outputs/figures"
+  models:       "outputs/models"
+  reports:      "outputs/reports"
+  maps:         "outputs/maps"
