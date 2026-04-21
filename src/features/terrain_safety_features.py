@@ -26,7 +26,7 @@ Chicago sidewalk inventory (CDOT open data).
 
     safety_crash_density        Pedestrian crashes per km² (5-year window)
     safety_crash_count          Raw crash count within hex boundary
-    safety_sidewalk_coverage    Fraction of street edges with mapped sidewalk
+    safety_sidewalk_coverage    Fraction of street edges with mapped sidewalk #not working
     safety_lit_street_ratio     Fraction of edges tagged with street lighting
 
 Usage
@@ -36,13 +36,9 @@ Usage
 
 SRTM Download Instructions
 ---------------------------
-1. Go to https://dwtkns.com/srtm30m/ — interactive tile selector
-2. Chicago falls in tiles: N41W088, N41W089, N42W088, N42W089
-3. Requires a free NASA Earthdata account: https://urs.earthdata.nasa.gov
-4. Download all 4 tiles as .hgt files into data/raw/elevation/
-5. Alternative: use the `elevation` Python package (pip install elevation)
-   which downloads SRTM tiles automatically:
-   eio clip -o data/raw/elevation/chicago_srtm.tif \\
+    Use the `elevation` Python package (pip install elevation)
+    which downloads SRTM tiles automatically:
+    eio clip -o data/raw/elevation/chicago_srtm.tif \\
        --bounds -88.0 41.6 -87.5 42.1
 
 Vision Zero Data
@@ -51,7 +47,7 @@ Downloaded automatically from Chicago Data Portal (no API key needed).
 URL: https://data.cityofchicago.org/resource/85ca-t3if.json
 Updates monthly. Cached in data/raw/crash/
 
-Sidewalk Data
+Sidewalk Data (not working)
 -------------
 Downloaded automatically from Chicago Data Portal.
 URL: https://data.cityofchicago.org/resource/ii9m-5gg9.json
