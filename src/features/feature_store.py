@@ -15,7 +15,7 @@ FEATURE_FILES: list[tuple[str, str]] = [
     ("poi_features",      "Week 3 — POI density"),
     ("transit_features",  "Week 3 — transit accessibility"),
     ("terrain_features",  "Week 4 — elevation / slope"),
-    ("safety_features",   "Week 4 — pedestrian safety"),
+    # ("safety_features",   "Week 4 — pedestrian safety"),
     ("census_features",   "Week 5 — Census ACS demographics"),
 ]
  
