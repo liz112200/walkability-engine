@@ -62,7 +62,7 @@ from tqdm import tqdm
 from src.utils.config import cfg
 
 # ── Constants ──────────────────────────────────────────────────────────────────
-
+RANDOM_SEED = 42
 WALK_SCORE_URL = "https://api.walkscore.com/score"
 RATE_LIMIT_DELAY = 0.25   # seconds between API calls (4 calls/sec max)
 
@@ -212,98 +212,146 @@ def build_walk_score_labels(
 
 def build_spatial_cv_splits(
     out_path: Path | None = None,
+    n_train_folds: int = 4,
+    min_fold_pct: float = 15.0,
 ) -> pd.DataFrame:
     """
-    Assign each hex cell to one of 5 geographic folds for spatial CV.
-
-    Fold assignment:
-        0 = Center  (Loop ± 4km radius) — held out as final test set
-        1 = North   (latitude > city center, not Center)
-        2 = South   (latitude < city center, not Center)
-        3 = East    (longitude > city center, not Center or N/S)
-        4 = West    (longitude < city center, not Center or N/S)
-
-    The N/S split takes priority over E/W — Chicago is elongated N-S so
-    this produces more balanced fold sizes.
-
-    Returns DataFrame with columns: h3_index, fold, fold_name, split
-    where split is 'train' for folds 1-4 and 'test' for fold 0.
-    (Actual CV uses all 5 folds rotationally; split='test' marks the
-    primary holdout for final evaluation.)
+    Assign each hex cell to one of (n_train_folds + 1) spatial CV folds.
+ 
+    Returns
+    -------
+    DataFrame with columns: h3_index, fold, fold_name, split, data_sparse
     """
+    from sklearn.cluster import KMeans
+ 
     slug     = cfg.city.slug
     out_path = out_path or (cfg.paths.splits / f"{slug}_spatial_cv.parquet")
     cfg.paths.splits.mkdir(parents=True, exist_ok=True)
-
+ 
     net = gpd.read_parquet(
         str(cfg.paths.processed / f"{slug}_network_features.parquet")
     )[["h3_index", "centroid_lat", "centroid_lng", "centroid_x",
        "centroid_y", "data_sparse"]]
-
+ 
+    # Load labeled hexes — KMeans runs only on hexes that will be used in modeling
+    labels_path = cfg.paths.labels / f"{slug}_walk_scores.parquet"
+    assert labels_path.exists(), (
+        "Walk Score labels not found. Run: python -m src.features.labels --step scores"
+    )
+    labels = pd.read_parquet(str(labels_path))[["h3_index", "walk_score"]]
+ 
+    labeled_dense = (
+        net[net["data_sparse"] == 0]
+        .merge(labels.dropna(subset=["walk_score"]), on="h3_index", how="inner")
+    )
+    logger.info(f"Labeled dense hexes for fold assignment: {len(labeled_dense):,}")
+ 
+    # ── Step 1: Identify center fold ──────────────────────────────────────────
     center_wgs = gpd.GeoDataFrame(
         geometry=gpd.points_from_xy([CHICAGO_CENTER_LNG], [CHICAGO_CENTER_LAT]),
         crs="EPSG:4326",
     ).to_crs(cfg.city.crs)
     cx = center_wgs.geometry.x.iloc[0]
     cy = center_wgs.geometry.y.iloc[0]
-
-    # Distance from city center for each hex (in metres, UTM)
+ 
     dist_from_center = np.sqrt(
-        (net["centroid_x"] - cx)**2 + (net["centroid_y"] - cy)**2
+        (labeled_dense["centroid_x"] - cx)**2 +
+        (labeled_dense["centroid_y"] - cy)**2
     )
-
-    # Assign folds
-    folds = []
-    for i, row in net.iterrows():
-        d = dist_from_center.loc[i]
-        lat = row["centroid_lat"]
-        lng = row["centroid_lng"]
-
-        if d <= CENTER_RADIUS_M:
-            fold = 0
+    is_center = dist_from_center <= CENTER_RADIUS_M
+ 
+    center_hexes = labeled_dense[is_center]["h3_index"].values
+    train_hexes  = labeled_dense[~is_center].copy().reset_index(drop=True)
+ 
+    logger.info(
+        f"Center fold: {len(center_hexes):,} hexes  |  "
+        f"Train pool: {len(train_hexes):,} hexes"
+    )
+ 
+    # ── Step 2: KMeans on train hex centroids ─────────────────────────────────
+    # n_init=20 runs KMeans 20 times with different seeds and keeps the best
+    coords = train_hexes[["centroid_x", "centroid_y"]].values
+    kmeans = KMeans(
+        n_clusters=n_train_folds,
+        random_state=RANDOM_SEED,
+        n_init=20,
+    )
+    cluster_labels = kmeans.fit_predict(coords)
+ 
+    # Remap cluster IDs to folds 1..n_train_folds
+    # Sort clusters by centroid northing (y) so fold 1 = northernmost cluster.
+    # This makes fold names geographically interpretable.
+    cluster_centers = kmeans.cluster_centers_
+    north_order = np.argsort(cluster_centers[:, 1])[::-1]  # descending y
+    remap = {old: new + 1 for new, old in enumerate(north_order)}
+    train_hexes["fold"] = [remap[c] for c in cluster_labels]
+ 
+    # ── Step 3: Build fold_name from cluster geographic character ────────────
+    fold_name_map = {}
+    for fold_id in range(1, n_train_folds + 1):
+        fold_hexes = train_hexes[train_hexes["fold"] == fold_id]
+        mean_lat = fold_hexes["centroid_lat"].mean()
+        mean_lng = fold_hexes["centroid_lng"].mean()
+        ns = "north" if mean_lat >= CHICAGO_CENTER_LAT else "south"
+        ew = "east"  if mean_lng >= CHICAGO_CENTER_LNG else "west"
+        fold_name_map[fold_id] = f"{ns}_{ew}_{fold_id}"
+ 
+    # ── Step 4: Assign folds to ALL hexes (not just labeled dense ones) ───────
+    # Non-labeled and sparse hexes get fold=-1 (excluded from modeling).
+    # Center hexes get fold=0. Train hexes get fold 1..n_train_folds.
+    h3_to_fold      = dict(zip(train_hexes["h3_index"], train_hexes["fold"]))
+    center_set       = set(center_hexes)
+    fold_name_map[0] = "center"
+ 
+    all_folds      = []
+    all_fold_names = []
+    all_splits     = []
+ 
+    for h3_id in net["h3_index"]:
+        if h3_id in center_set:
+            all_folds.append(0)
+            all_fold_names.append("center")
+            all_splits.append("test")
+        elif h3_id in h3_to_fold:
+            f = h3_to_fold[h3_id]
+            all_folds.append(f)
+            all_fold_names.append(fold_name_map[f])
+            all_splits.append("train")
         else:
-            north = lat >= CHICAGO_CENTER_LAT
-            east = lng >= CHICAGO_CENTER_LNG
-            if north and east:
-                fold = 1    # North
-            elif north and not east:
-                fold = 2    # North West
-            elif not north and east:
-                fold = 3    # South East
-            else:
-                fold = 4    # South West
-
-        folds.append(fold)
-
-    fold_names = {0: "center", 1: "north_east", 2: "north_west", 3: "south_east", 4: "south_west"}
-
-
+            all_folds.append(-1)
+            all_fold_names.append("excluded")
+            all_splits.append("excluded")
+ 
     result = pd.DataFrame({
-        "h3_index":  net["h3_index"].values,
-        "fold":      folds,
-        "fold_name": [fold_names[f] for f in folds],
-        "split":     ["test" if f == 0 else "train" for f in folds],
+        "h3_index":    net["h3_index"].values,
+        "fold":        all_folds,
+        "fold_name":   all_fold_names,
+        "split":       all_splits,
         "data_sparse": net["data_sparse"].values,
     })
-
-    # Log fold distribution
-    fold_counts = result.groupby(["fold_name", "split"]).size()
-    logger.info("Spatial CV fold distribution:")
-    for (fname, split), count in fold_counts.items():
-        logger.info(f"  {fname:<8} ({split:<5}): {count:,} hexes")
-
-    # Verify folds are reasonably balanced (no fold < 15% of dense cells)
-    dense_result = result[(result["data_sparse"] == 0)]
-    train_folds  = dense_result[dense_result["fold"] != 0]
-    fold_balance = train_folds["fold"].value_counts()
-    min_fold_pct = fold_balance.min() / len(train_folds) * 100
-    center_pct   = (dense_result["fold"] == 0).sum() / len(dense_result) * 100
-    logger.info(f"Center fold: {(dense_result['fold']==0).sum():,} dense hexes ({center_pct:.1f}%)")
-    logger.info(f"Train fold balance — smallest: {min_fold_pct:.1f}% of train cells")
-    if min_fold_pct < 15:
-        logger.warning("Unbalanced train folds — south_west dominates (expected for Chicago shape)")
-    else:
-        logger.info("Fold balance OK")
+ 
+    # ── Step 5: Balance check ─────────────────────────────────────────────────
+    train_only = result[result["split"] == "train"]
+    fold_counts = train_only["fold"].value_counts().sort_index()
+    total_train = len(train_only)
+ 
+    logger.info("Spatial CV fold distribution (labeled dense hexes):")
+    logger.info(f"  {'Fold':<6} {'Name':<20} {'Count':>6} {'Pct':>6}")
+    logger.info(f"  {'0':<6} {'center (test)':<20} {len(center_hexes):>6}  "
+                f"{100*len(center_hexes)/(len(center_hexes)+total_train):>5.1f}%")
+    for fold_id, count in fold_counts.items():
+        pct = 100 * count / total_train
+        logger.info(f"  {fold_id:<6} {fold_name_map[fold_id]:<20} {count:>6}  {pct:>5.1f}%")
+ 
+    # Enforce minimum fold size
+    min_pct_actual = fold_counts.min() / total_train * 100
+    if min_pct_actual < min_fold_pct:
+        raise ValueError(
+            f"Smallest train fold has only {min_pct_actual:.1f}% of train hexes "
+            f"(minimum required: {min_fold_pct:.1f}%). "
+            f"Increase CENTER_RADIUS_M or decrease n_train_folds."
+        )
+    logger.info(f"Balance check PASSED — smallest fold: {min_pct_actual:.1f}%")
  
     result.to_parquet(str(out_path))
     logger.info(f"Spatial CV splits saved → {out_path.relative_to(cfg.project_root)}")
