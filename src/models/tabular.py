@@ -18,117 +18,20 @@ from sklearn.linear_model import Ridge
 from sklearn.metrics import mean_squared_error, r2_score
 
 from src.utils.config import cfg
+# Remove these three function definitions from tabular.py entirely,
+# and replace the imports section with:
+
+from src.models.utils import (
+    load_modeling_data,
+    preprocess_features,
+    regression_metrics,
+    CENTER_FOLD,
+    RANDOM_SEED
+)
 
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 N_OPTUNA_TRIALS = 100
-CENTER_FOLD = 0
-RANDOM_SEED   = 42
-
-
-EXCLUDE_COLS = {
-    "h3_index", "geometry",
-    "centroid_x", "centroid_y", "centroid_lat", "centroid_lng",
-    "data_sparse", "n_real_edges", "n_nodes_in_hex",
-    "poi_transit_kde",       
-    "safety_crash_count",    
-}
-
-
-# ── Data loading ───────────────────────────────────────────────────────────────
-def load_modeling_data() -> tuple[pd.DataFrame, pd.Series, pd.Series]:
-    """ 
-    Returns
-    -------
-    X : Feature matrix (dense hexes with valid labels only).
-    y : Walk Score labels (0–100).
-    folds : Fold assignment (0=center/test, 1-4=train quadrants).
-    """
-    slug = cfg.city.slug
-
-    master = gpd.read_parquet(
-        str(cfg.paths.processed.parent / "master_features.parquet")
-    )
-
-    labels_path = cfg.paths.labels / f"{slug}_walk_scores.parquet"
-    assert labels_path.exists(), (
-        f"Labels not found: {labels_path}\n"
-        "Run: python -m src.features.labels --step scores"
-    )
-    labels = pd.read_parquet(str(labels_path))[["h3_index", "walk_score"]]
-
-    splits_path = cfg.paths.splits / f"{slug}_spatial_cv.parquet"
-    assert splits_path.exists(), (
-        f"Splits not found: {splits_path}\n"
-        "Run: python -m src.features.labels --step splits"
-    )
-    splits = pd.read_parquet(str(splits_path))[["h3_index", "fold"]]
-
-    # Join
-    df = master.merge(labels, on="h3_index", how="inner")
-    df = df.merge(splits, on="h3_index", how="inner")
-
-    df = df[df["data_sparse"] == 0].copy()
-    df = df[df["walk_score"].notna()].copy()
-    df = df.reset_index(drop=True)
-
-    logger.info(
-        f"Modeling dataset: {len(df):,} hexes  |  "
-        f"label range: [{df['walk_score'].min():.0f}, {df['walk_score'].max():.0f}]  |  "
-        f"folds: {df['fold'].value_counts().sort_index().to_dict()}"
-    )
-
-    # Build feature matrix
-    feature_cols = [
-        c for c in df.columns
-        if c not in EXCLUDE_COLS
-        and c not in {"walk_score", "fold", "data_sparse"}
-        and not c.startswith("geometry")
-        and df[c].dtype in [np.float64, np.float32, np.int64, np.int32, np.int16]
-    ]
-
-    X = df[feature_cols].copy()
-    y = df["walk_score"].copy()
-    folds = df["fold"].copy()
-
-    logger.info(f"Feature matrix: {X.shape}  |  features: {len(feature_cols)}")
-    return X, y, folds, feature_cols
-
-# ── Feature preprocessing ──────────────────────────────────────────────────────
-def preprocess_features(X_train: pd.DataFrame, X_val: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """
-    Impute missing values with training-set medians.
-    XGBoost handles NaN natively, but imputing avoids surprises with
-    the linear baseline and future sklearn models.
- 
-    Fit only on training data — never on validation/test data.
-    """
-
-    medians = X_train.median()
-    medians = medians.fillna(0)
-    X_train_filled = X_train.fillna(medians)
-    X_val_filled = X_val.fillna(medians)
-    
-    still_nan = X_train_filled.columns[X_train_filled.isna().all()].tolist()
-    if still_nan:
-        logger.warning(f"Dropping {len(still_nan)} all-NaN columns: {still_nan}")
-        X_train_filled = X_train_filled.drop(columns=still_nan)
-        X_val_filled   = X_val_filled.drop(columns=still_nan)
- 
-    return X_train_filled, X_val_filled
-
-# ── Metrics ────────────────────────────────────────────────────────────────────
-def regression_metrics(y_true: np.ndarray, y_pred: np.ndarray, label: str = "") -> dict:
-    rmse = np.sqrt(mean_squared_error(y_true, y_pred))
-    r2 = r2_score(y_true, y_pred)
-    mae = np.mean(np.abs(y_true - y_pred))
-    
-    prefix = f"{label} " if label else ""
-    logger.info(
-        f"  {prefix}RMSE={rmse:.3f}  R²={r2:.3f}  MAE={mae:.3f}  n={len(y_true)}"
-    )
-    return {"rmse": rmse, "r2": r2, "mae": mae}
-
 
 # ── Linear baseline ────────────────────────────────────────────────────────────
 def train_linear_baseline(
@@ -368,7 +271,7 @@ def run_tabular_pipeline(n_trials: int = N_OPTUNA_TRIALS) -> dict:
     slug = cfg.city.slug
     cfg.paths.models.mkdir(parents=True, exist_ok=True)
 
-    mlflow.set_experiment("walkability-xgboost")
+    mlflow.set_experiment("walkability-models")
 
     with mlflow.start_run(run_name=f"week7_{slug}"):
         # ── 1. Load data ───────────────────────────────────────────────────────
@@ -380,7 +283,7 @@ def run_tabular_pipeline(n_trials: int = N_OPTUNA_TRIALS) -> dict:
             "city": slug
         })
 
-         # ── 2. Linear baseline ─────────────────────────────────────────────────
+        # ── 2. Linear baseline ─────────────────────────────────────────────────
         logger.info("=" * 55)
         logger.info("LINEAR BASELINE")
         logger.info("=" * 55)
@@ -451,6 +354,7 @@ def run_tabular_pipeline(n_trials: int = N_OPTUNA_TRIALS) -> dict:
  
         return {**baseline_metrics, **final_metrics, "best_params": best_params}
 
+# ── CLI ────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     Path("logs").mkdir(exist_ok=True)

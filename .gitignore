@@ -56,3 +56,4 @@ logs/
 cache/
 mlflow.db
 mlruns/
+outputs/
