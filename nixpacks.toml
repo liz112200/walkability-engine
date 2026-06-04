@@ -1,4 +1,12 @@
-# System packages required by geopandas / shapely on Railway's Nixpacks builder.
-# Without these, pip will try to compile GDAL/GEOS from source and fail.
 [phases.setup]
 nixPkgs = ["gdal", "geos", "proj"]
+
+[phases.install]
+cmds = [
+    "python3 -m venv --copies /opt/venv",
+    ". /opt/venv/bin/activate && pip install --upgrade pip",
+    ". /opt/venv/bin/activate && pip install -r requirements.txt"
+]
+
+[start]
+cmd = "PYTHONPATH=/app /opt/venv/bin/uvicorn src.api.main:app --host 0.0.0.0 --port $PORT"
