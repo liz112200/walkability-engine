@@ -1,0 +1,44 @@
+# Version control
+.git/
+.gitignore
+
+# Python artefacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Data that's not needed at runtime
+data/raw/
+data/external/
+outputs/models/
+outputs/equity/
+outputs/features/
+
+# ML experiment tracking (large, not needed by API)
+mlruns/
+mlartifacts/
+mlflow.db
+
+# Notebooks and docs
+notebooks/
+README.md
+LICENSE
+
+# Local dev / IDE
+.env
+*.env
+.venv/
+venv/
+.vscode/
+.idea/
+.streamlit/secrets.toml
+
+# Caches and logs
+logs/
+cache/
+.osmnx_cache/
+*.logcache/
+.DS_Store
