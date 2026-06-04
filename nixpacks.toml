@@ -1,0 +1,4 @@
+# System packages required by geopandas / shapely on Railway's Nixpacks builder.
+# Without these, pip will try to compile GDAL/GEOS from source and fail.
+[phases.setup]
+nixPkgs = ["gdal", "geos", "proj"]
