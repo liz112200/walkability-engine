@@ -1,202 +1,194 @@
-# Predictive Walkability Engine
+# Chicago Walkability Engine
 
-> A Geospatial AI system that predicts multi-dimensional pedestrian walkability for Chicago, IL - going beyond traditional Walk Score metrics through Graph Neural Networks, street-level imagery analysis, and an equity audit of walkability disparities across demographic groups.
+Predicts and explains pedestrian walkability for every neighbourhood in Chicago
+using machine learning, street network analysis, and SHAP attribution. Goes
+beyond Walk Score by identifying *which features* drive each prediction and
+*whether those features cluster along demographic lines*.
 
+## Live Demo
 
----
+| Service | URL |
+|---|---|
+| Dashboard | https://walkability-engine.streamlit.app |
+| API | https://walkability-engine-production.up.railway.app |
+| API Docs | https://walkability-engine-production.up.railway.app/docs |
 
-## Table of Contents
+## What It Does
 
-- [Overview](#overview)
-- [Architecture](#architecture)
-- [Quickstart](#quickstart)
-- [Project Structure](#project-structure)
-- [Data Sources](#data-sources)
-- [Reproducing Results](#reproducing-results)
-- [Roadmap (16-week plan)](#roadmap)
-- [References](#references)
-- [License](#license)
+Walk Score gives you a number. This system gives you a number plus an
+explanation plus a demographic overlay. For any of Chicago's 5,023
+H3 resolution-9 hex cells (~174m edge), it predicts a walkability score,
+decomposes that prediction into per-feature SHAP attributions, and
+quantifies whether low-scoring areas cluster in minority and low-income
+neighbourhoods — and why.
 
----
+## Results
 
-## Overview
+| Model | Test RMSE | Test R² |
+|---|---|---|
+| Ridge baseline | 11.802 | 0.512 |
+| XGBoost | 9.610 | 0.680 |
+| LightGBM | 9.507 | 0.686 |
+| Ensemble | 9.371 | 0.695 |
+| **GraphSAGE GNN** | **7.780** | **0.790** |
 
-Standard walkability metrics (e.g. Walk Score) reduce complex pedestrian environments to a single scalar. This project builds a **multi-dimensional predictive engine** that:
+The GNN beats the tabular ensemble by 1.591 RMSE points by incorporating
+spatial adjacency — what surrounds a neighbourhood matters, not just
+what is in it. Optuna consistently chose a single-layer architecture
+(59→192→1), confirming that walkability is a 1-hop local signal (~174m radius).
 
-1. Assembles a 30–40 feature vector per H3 hexagonal cell from OpenStreetMap, GTFS transit feeds, SRTM elevation, US Census ACS, and Vision Zero crash data.
-2. Trains an **ensemble of XGBoost + LightGBM + Graph Neural Network** models using spatial cross-validation to avoid leakage.
-3. Adds a **street-level imagery dimension** via fine-tuned EfficientNet on Google Street View / Mapillary imagery.
-4. Produces **SHAP-based explanations** for every predicted score — telling you *why* an area is scored the way it is.
-5. Runs an **equity audit** testing whether low-walkability areas are disproportionately distributed across income and demographic groups using spatial autocorrelation (Moran's I).
+## Key Equity Findings
 
-**Target city:** Chicago, IL — chosen for its rich open data ecosystem, pronounced walkability gradients (Loop vs. far South/West sides), and dense pedestrian crash dataset.
-
----
+- **Moran's I = 0.866** (p < 0.0001) — walkability is near-maximally
+  spatially clustered. Low-scoring hexes form solid contiguous blocks
+  on Chicago's South and West Sides.
+- **Population density r = +0.650** — the strongest demographic predictor.
+- **% Black r = −0.259**, **% minority r = −0.231** — significant negative
+  correlations after 1,000-trial permutation testing.
+- **% Hispanic r = +0.020** — not significant. Pilsen (high walkability)
+  and Northwest Side (moderate) cancel out in the aggregate.
+- **Restaurant density accounts for 34% of the 10-point walkability gap**
+  between highest-minority and lowest-minority quartiles. Safety
+  infrastructure is not the driver — amenity distribution is.
+- **Safety crash density shows a positive SHAP effect** — a Walk Score label
+  artefact. The model learned that crash density proxies urban activity,
+  not danger, because Walk Score does not penalise safety.
 
 ## Architecture
 
 ```
-Data Ingestion          Feature Engineering       ML Core             Output
-──────────────          ───────────────────       ───────             ──────
-OSMnx (OSM)      ─┐
-GTFS (CTA)        ├──► H3 hex aggregation ──►  XGBoost  ─┐
-Census ACS        │    (res-9, ~174m cells)    LightGBM   ├──► Ensemble ──► Score + SHAP
-SRTM elevation   ─┤                            GNN (GAT)  │    + equity audit
-Vision Zero crash │                            EfficientNet┘
-Street View imgs ─┘
-
+OSM street network  ──┐
+Vision Zero crashes   ├──▶ Feature pipeline ──▶ H3 hex grid (5,023 cells)
+CTA GTFS transit      │    (60 features)        │
+Census ACS 2022       │                         ▼
+SRTM elevation      ──┘                    ML models
+                                           (XGBoost / LightGBM /
+Walk Score API ────────────────────────▶   GNN ensemble)
+(weak labels)                              │
+                                           ▼
+                                      SHAP attribution
+                                           │
+                                           ▼
+                              FastAPI ──▶ Streamlit dashboard
+                              (Railway)   (Streamlit Cloud)
 ```
-
----
-
-## Quickstart
-
-### 1. Clone the repository
-
-```bash
-git clone https://github.com/YOUR_USERNAME/walkability-engine.git
-cd walkability-engine
-```
-
-### 2. Create and activate the conda environment
-
-```bash
-# This resolves GDAL/PROJ correctly via conda-forge
-conda env create -f environment.yml
-conda activate walkability
-
-# Verify the geospatial stack is wired
-python -c "import osmnx, geopandas, h3; print('Environment OK')"
-```
-
-### 3. Configure API keys
-
-```bash
-cp .env.example .env
-# Edit .env and add your Walk Score, Census, and Street View API keys
-```
-
-### 4. Run Week 1 ingestion
-
-```bash
-# Downloads Chicago pedestrian network (~180k nodes, ~10 min first run)
-# Results are cached in .osmnx_cache/ for fast re-runs
-python -m src.ingestion.fetch_osm_network
-
-# Expected output:
-#   data/raw/osm/chicago_walk_graph.graphml   (~200 MB)
-#   data/raw/osm/chicago_walk_edges.gpkg      (~80 MB)
-#   data/raw/osm/chicago_walk_nodes.gpkg      (~20 MB)
-```
-
-### 5. Open the sanity-check notebook
-
-```bash
-jupyter lab notebooks/01_sanity_check_network.ipynb
-# Run all cells — all 8 checks in the final cell must pass
-```
-
----
 
 ## Project Structure
 
 ```
 walkability-engine/
-├── configs/
-│   └── city_config.yml          # City, CRS, H3 resolution, all data paths
-├── data/
-│   ├── raw/                     # Original downloaded files (git-ignored)
-│   │   ├── osm/                 # GraphML + GeoPackages from OSMnx
-│   │   ├── gtfs/                # CTA GTFS feed
-│   │   ├── census/              # ACS 5-year estimates
-│   │   ├── elevation/           # SRTM 30m raster tiles
-│   │   ├── poi/                 # Point-of-interest data
-│   │   └── crash/               # Vision Zero pedestrian crash data
-│   └── processed/
-│       ├── features/            # H3-indexed feature GeoDataFrame (Parquet)
-│       ├── labels/              # Walk Score labels
-│       └── splits/              # Spatial CV fold assignments
-├── notebooks/
-│   ├── 01_sanity_check_network.ipynb
-│   ├── 02_h3_grid_features.ipynb       # Week 2
-│   ├── 03_poi_transit_features.ipynb   # Week 3
-│   └── ...
 ├── src/
-│   ├── ingestion/               # Data download scripts
-│   ├── features/                # Feature engineering
-│   ├── models/                  # XGBoost, LightGBM, GNN
-│   ├── evaluation/              # Spatial CV, metrics, SHAP
-│   ├── visualization/           # Map and chart helpers
-│   └── utils/                   # Config loader, logging, H3 helpers
-├── outputs/
-│   ├── figures/                 # PNG exports from notebooks
-│   ├── maps/                    # GeoJSON for Kepler.gl / Streamlit
-│   ├── models/                  # Serialised model artefacts
-│   └── reports/                 # Final PDF report
-├── tests/                       # pytest unit tests
-├── .env.example                 # API key template
-├── environment.yml              # Conda environment (conda-forge)
-└── README.md
+│   ├── ingestion/          OSM network download
+│   ├── features/           Feature engineering modules
+│   │   ├── edge_preprocessing.py
+│   │   ├── network_features.py
+│   │   ├── poi_transit_features.py
+│   │   ├── terrain_safety_features.py
+│   │   ├── census_features.py
+│   │   └── labels.py           Walk Score API + spatial CV
+│   ├── models/
+│   │   ├── utils.py             Shared CV utilities
+│   │   ├── tabular.py           XGBoost + Optuna
+│   │   ├── lgbm.py              LightGBM + Optuna
+│   │   ├── ensemble.py          Ridge meta-learner
+│   │   └── gnn.py               GraphSAGE + Optuna
+│   ├── evaluation/
+│   │   ├── shap_analysis.py
+│   │   └── equity_audit.py
+│   ├── api/
+│   │   └── main.py              FastAPI backend (6 endpoints)
+│   └── dashboard/
+│       ├── app.py               Streamlit entry point
+│       ├── api_client.py        Backend API calls
+│       ├── map_builder.py       Pydeck H3 hex map
+│       ├── charts.py            Plotly SHAP charts
+│       ├── styles.py            Injected CSS
+│       └── config.py            API URL resolution
+├── data/processed/
+│   ├── shap_values.parquet      1.5 MB — SHAP matrix (5023 × 65)
+│   └── master_features.parquet  4.8 MB — all features (11484 × 71)
+├── Dockerfile
+├── requirements.txt
+└── configs/city_config.yml
 ```
 
----
+## Running Locally
+
+```bash
+# Clone and set up environment
+git clone https://github.com/your-username/walkability-engine
+cd walkability-engine
+conda env create -f environment-dev.yml
+conda activate walkability
+
+# Terminal 1 — start API
+python -m uvicorn src.api.main:app --reload --port 8001
+
+# Terminal 2 — start dashboard
+API_URL=http://localhost:8001 streamlit run src/dashboard/app.py
+```
+
+## Reproducing the Full Pipeline
+
+```bash
+# Weeks 2-5: feature engineering
+python -m src.ingestion.fetch_osm_network
+python -m src.features.edge_preprocessing
+python -m src.features.network_features
+python -m src.features.poi_transit_features
+python -m src.features.terrain_safety_features
+python -m src.features.census_features
+python -m src.features.feature_store
+
+# Week 6: Walk Score labels + spatial CV
+python -m src.features.labels --step scores
+python -m src.features.labels --step splits
+
+# Weeks 7-9: models
+python -m src.models.tabular
+python -m src.models.lgbm --fast
+python -m src.models.ensemble
+python -m src.models.gnn
+
+# Weeks 10-11: analysis
+python -m src.evaluation.shap_analysis
+python -m src.evaluation.equity_audit
+```
 
 ## Data Sources
 
-| Source | Data | Access |
-|--------|------|--------|
-| OpenStreetMap via OSMnx | Street network, POIs, sidewalks | Free |
-| CTA GTFS | Transit stops, headways, routes | Free via transit.land |
-| US Census ACS (5-yr) | Income, race, age by tract | Free API key |
-| NASA SRTM | 30m elevation tiles | Free (Earthdata account) |
-| Vision Zero Chicago | Pedestrian crash locations | Free, city open data portal |
-| Walk Score API | Ground truth labels | Free tier, 5k calls/day |
-| Google Street View Static | Imagery for EfficientNet | Pay-per-use ($7/1k images) |
-| Mapillary | Open imagery alternative | Free API |
+| Source | What it provides | License |
+|---|---|---|
+| OpenStreetMap | Street network, POIs | ODbL |
+| Chicago Vision Zero | Pedestrian crash data | Public domain |
+| CTA GTFS | Transit stops, headways | Public domain |
+| Census ACS 2022 | Demographics (Cook County) | Public domain |
+| SRTM 30m | Elevation | Public domain |
+| Walk Score API | Walkability labels | Commercial (queried once) |
 
----
+## API Endpoints
 
-## Reproducing Results
-
-Each week has a corresponding notebook that must be run in order:
-
-```bash
-# Week 1: Ingestion
-python -m src.ingestion.fetch_osm_network
-jupyter nbconvert --to notebook --execute notebooks/01_sanity_check_network.ipynb
-
-# Week 2: H3 + network features  (coming Week 2)
-# Week 3: POI + transit features  (coming Week 3)
-# ...
+```
+GET  /health                    Liveness check
+GET  /hex/{h3_index}            Full data for one hex cell
+GET  /predict/{lat}/{lng}       Lat/lng → H3 → hex data
+POST /compare                   Side-by-side neighbourhood comparison
+GET  /city/summary              City-wide aggregate statistics
+GET  /neighbourhood/{name}      Named neighbourhood shortcut
 ```
 
-All notebooks are designed to be **restart-and-run-all clean**.
+## Release Tags
 
----
-
-## Roadmap
-
-| Phase | Weeks | Focus |
-|-------|-------|-------|
-| Foundation | 1–3 | Environment, OSM ingestion, H3 grid, POI/transit/terrain features |
-| Feature Engineering | 4–6 | Census integration, spatial CV setup, ground truth labels |
-| ML Modeling | 7–10 | XGBoost baseline, LightGBM ensemble, GNN (PyTorch Geometric) |
-| Explainability & Equity | 11–12 | SHAP attribution, Moran's I, demographic correlation analysis |
-| Application Layer | 13–14 | FastAPI backend, PostGIS, Streamlit dashboard |
-| Writeup & Polish | 15–16 | Report, presentation, reproducibility pass |
-
----
-
-## References
-
-- Frank, L. et al. (2010). *Stepping towards causation: Do built environments or neighborhood and travel preferences explain physical activity, driving, and obesity?* Social Science & Medicine.
-- Sallis, J. et al. (2016). *Physical activity in relation to urban environments in 14 cities worldwide.* The Lancet.
-- Boeing, G. (2017). *OSMnx: New methods for acquiring, constructing, analyzing, and visualizing complex street networks.* Computers, Environment and Urban Systems.
-- Brownson, R. et al. (2009). *Measuring the built environment for physical activity.* American Journal of Preventive Medicine.
-- Hamilton, W. et al. (2017). *Inductive representation learning on large graphs (GraphSAGE).* NeurIPS.
-
----
-
-## License
-
-MIT License — see [LICENSE](LICENSE).
+| Tag | Week | What was delivered |
+|---|---|---|
+| v0.2.0-week2 | 2 | OSM network features (26 features) |
+| v0.3.0-week3 | 3 | POI + transit features |
+| v0.4.0-week4 | 4 | Terrain + safety features |
+| v0.5.0-week5 | 5 | Census demographics |
+| v0.6.0-week6 | 6 | Walk Score labels + KMeans spatial CV |
+| v0.7.0-week7 | 7 | XGBoost model (RMSE 9.610) |
+| v0.8.0-week8 | 8 | LightGBM + Ridge ensemble (RMSE 9.371) |
+| v0.9.0-week9 | 9 | GraphSAGE GNN (RMSE 7.780) |
+| v0.10.0-week10 | 10 | SHAP explainability |
+| v0.11.0-week11 | 11 | Spatial equity audit |
+| v0.12.0-week12 | 12 | FastAPI backend + deployment |
