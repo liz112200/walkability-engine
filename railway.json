@@ -4,8 +4,9 @@
     "builder": "DOCKERFILE"
   },
   "deploy": {
-    "startCommand": "/bin/sh /app/start.sh",
     "restartPolicyType": "ON_FAILURE",
-    "restartPolicyMaxRetries": 10
+    "restartPolicyMaxRetries": 3,
+    "healthcheckPath": "/health",
+    "healthcheckTimeout": 30
   }
 }
