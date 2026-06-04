@@ -19,4 +19,4 @@ COPY . .
 
 ENV PYTHONPATH=/app
 
-CMD ["sh", "-c", "uvicorn src.api.main:app --host 0.0.0.0 --port $PORT"]
+CMD ["/bin/sh", "/app/start.sh"]
