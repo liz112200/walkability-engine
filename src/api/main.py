@@ -125,6 +125,11 @@ _summary:    Optional[dict]          = None
 _feature_cols: Optional[list]        = None
 _shap_cols:    Optional[list]        = None
 
+@app.get("/")
+def root():
+    return {"service": "Chicago Walkability Engine", "docs": "/docs", "health": "/health"}
+
+
 class CompareRequest(BaseModel):
     hex_a: str
     hex_b: str
